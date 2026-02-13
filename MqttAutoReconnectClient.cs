@@ -21,7 +21,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
     private Task? _pendingMessageProcessorTask;
     private volatile bool _disposed;
     private readonly Channel<(string topic, byte[] payload)> _pendingMessages =
-        Channel.CreateBounded<(string topic, byte[] payload)>(1000);
+        Channel.CreateBounded<(string topic, byte[] payload)>(10_000);
 
 
     public event Func<string, byte[], Task>? OnMessage;
