@@ -14,6 +14,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
     private readonly ILogger? _logger;
     private readonly IMqttClient _client = new MqttClientFactory().CreateMqttClient();
     private readonly SemaphoreSlim _connectLock = new(1, 1);
+    private readonly object _lifecycleSync = new();
     private readonly CancellationTokenSource _lifetime = new();
 
     private MqttClientInfo _info;
@@ -85,7 +86,8 @@ public sealed class MqttAutoReconnectClient : IDisposable
 
         _client.DisconnectedAsync += async args =>
         {
-            _logger?.LogWarning(args.Exception, "MQTT {server} DAN UZILDI!", _info.Server);
+            _logger?.LogWarning(args.Exception, "MQTT {server} DAN UZILDI! Reason: {reason} (reason string: {reasonString})",
+                _info.Server, args.Reason, args.ReasonString);
             try { await (OnDisconnected?.Invoke() ?? Task.CompletedTask).ConfigureAwait(false); }
             catch (Exception ex) { _logger?.LogError(ex, "OnDisconnected handler error"); }
         };
@@ -93,22 +95,49 @@ public sealed class MqttAutoReconnectClient : IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        _reconnectTask ??= Task.Run(() => ReconnectLoopAsync(_lifetime.Token), _lifetime.Token);
-        _pendingMessageProcessorTask ??= Task.Run(() => ProcessPendingMessagesAsync(_lifetime.Token), _lifetime.Token);
-        
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(MqttAutoReconnectClient));
+        }
+
+        lock (_lifecycleSync)
+        {
+            _reconnectTask ??= Task.Run(() => ReconnectLoopAsync(_lifetime.Token), _lifetime.Token);
+            _pendingMessageProcessorTask ??= Task.Run(() => ProcessPendingMessagesAsync(_lifetime.Token), _lifetime.Token);
+        }
+
         return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        Task? reconnectTask;
+        Task? pendingMessageProcessorTask;
+
         try
         {
             await _lifetime.CancelAsync().ConfigureAwait(false);
-            if (_reconnectTask != null)
+
+            lock (_lifecycleSync)
             {
-                try { await _reconnectTask.ConfigureAwait(false); }
-                catch (OperationCanceledException) { }
+                reconnectTask = _reconnectTask;
+                pendingMessageProcessorTask = _pendingMessageProcessorTask;
             }
+
+            if (reconnectTask != null)
+            {
+                try { await reconnectTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { _logger?.LogWarning(ex, "Reconnect task stopped with error"); }
+            }
+
+            if (pendingMessageProcessorTask != null)
+            {
+                try { await pendingMessageProcessorTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { _logger?.LogWarning(ex, "Pending message processor task stopped with error"); }
+            }
+
             if (_client.IsConnected)
             {
                 await _client.DisconnectAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -202,7 +231,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
     }
 
     // Enqueue payload methods to be sent when connected
-    public async Task EnqueueMessageAsync(string topic, byte [] payload, CancellationToken cancellationToken = default)
+    public async Task EnqueueMessageAsync(string topic, byte[] payload, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(topic);
         ArgumentNullException.ThrowIfNull(payload);
@@ -295,6 +324,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
         {
             _lifetime.Cancel();
             _reconnectTask?.Wait(3000);
+            _pendingMessageProcessorTask?.Wait(3000);
             _client.Dispose();
             _connectLock.Dispose();
         }
