@@ -116,6 +116,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
 
         try
         {
+            _pendingMessages.Writer.TryComplete();
             await _lifetime.CancelAsync().ConfigureAwait(false);
 
             lock (_lifecycleSync)
@@ -322,11 +323,13 @@ public sealed class MqttAutoReconnectClient : IDisposable
         _disposed = true;
         try
         {
+            _pendingMessages.Writer.TryComplete();
             _lifetime.Cancel();
             _reconnectTask?.Wait(3000);
             _pendingMessageProcessorTask?.Wait(3000);
             _client.Dispose();
             _connectLock.Dispose();
+            _lifetime.Dispose();
         }
         catch { /* ignore */ }
         finally
