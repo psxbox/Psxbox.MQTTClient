@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging;
 using MQTTnet;
-using System.Buffers;
 using System.Threading.Channels;
 
 namespace Psxbox.MQTTClient;
