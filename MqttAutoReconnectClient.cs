@@ -94,11 +94,8 @@ public sealed class MqttAutoReconnectClient : IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
-        if (_disposed)
-        {
-            throw new ObjectDisposedException(nameof(MqttAutoReconnectClient));
-        }
-
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        
         lock (_lifecycleSync)
         {
             _reconnectTask ??= Task.Run(() => ReconnectLoopAsync(_lifetime.Token), _lifetime.Token);
