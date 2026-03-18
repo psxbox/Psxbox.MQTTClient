@@ -35,7 +35,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
         _info = info;
         _logger = logger;
 
-        _client.ApplicationMessageReceivedAsync += e =>
+        _client.ApplicationMessageReceivedAsync += async e =>
         {
             try
             {
@@ -65,15 +65,13 @@ public sealed class MqttAutoReconnectClient : IDisposable
                 var d = OnMessage;
                 if (d != null)
                 {
-                    return d.Invoke(topic, payload);
+                    await d.Invoke(topic, payload).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "Error in ApplicationMessageReceivedAsync");
             }
-
-            return Task.CompletedTask;
         };
 
         _client.ConnectedAsync += async _ =>
@@ -95,6 +93,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
         
         lock (_lifecycleSync)
         {
@@ -178,17 +177,22 @@ public sealed class MqttAutoReconnectClient : IDisposable
         _logger?.LogInformation("Pending message processor stopped");
     }
 
-    public async Task<bool> WaitForConnectedAsync(TimeSpan timeout)
+    public Task<bool> WaitForConnectedAsync(TimeSpan timeout)
+        => WaitForConnectedAsync(timeout, CancellationToken.None);
+
+    public async Task<bool> WaitForConnectedAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         if (_client.IsConnected) return true;
 
         using var timeoutCts = new CancellationTokenSource(timeout);
-        while (!timeoutCts.IsCancellationRequested)
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+
+        while (!linkedCts.IsCancellationRequested)
         {
             if (_client.IsConnected) return true;
-            try { await Task.Delay(200, timeoutCts.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { break; }
+            await Task.Delay(200, linkedCts.Token).ConfigureAwait(false);
         }
+
         return _client.IsConnected;
     }
 
