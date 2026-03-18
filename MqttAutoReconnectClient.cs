@@ -268,7 +268,6 @@ public sealed class MqttAutoReconnectClient : IDisposable
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
                 .WithProtocolVersion(MQTTnet.Formatter.MqttProtocolVersion.V500)
                 .WithCredentials(_info.UserName, _info.Password)
-                .WithTimeout(TimeSpan.FromSeconds(10))
                 .WithCleanStart(true)
                 .Build();
 
