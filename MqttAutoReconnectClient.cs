@@ -151,43 +151,52 @@ public sealed class MqttAutoReconnectClient : IDisposable
     {
         _logger?.LogInformation("Pending message processor started");
 
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            // TryPeek orqali xabar mavjudligini va ulanishni tekshirish
-            if (!_pendingMessages.Reader.TryPeek(out _) || !_client.IsConnected)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                try { await Task.Delay(100, cancellationToken).ConfigureAwait(false); }
-                catch (OperationCanceledException) { break; }
-                continue;
-            }
+                // WaitToReadAsync — xabar kelguncha CPU band qilmaydi
+                if (!await _pendingMessages.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                    break;
 
-            // Xabarni o'qish va yuborish
-            if (_pendingMessages.Reader.TryRead(out var msg))
-            {
-                Interlocked.Decrement(ref _pendingCount);
-                try
+                // Connected bo'lguncha kutish (50ms interval)
+                while (!_client.IsConnected && !cancellationToken.IsCancellationRequested)
                 {
-                    await PublishAsync(msg.topic, msg.payload, cancellationToken).ConfigureAwait(false);
-                    _logger?.LogDebug("Pending message sent TOPIC=\"{topic}\"", msg.topic);
+                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
                 }
-                catch (Exception ex)
-                {
-                    _logger?.LogError(ex, "Error publishing pending message TOPIC=\"{topic}\"", msg.topic);
 
-                    if (!cancellationToken.IsCancellationRequested)
+                // Channeldagi barcha xabarlarni ketma-ket yuborish (batch drain)
+                while (_pendingMessages.Reader.TryRead(out var msg))
+                {
+                    Interlocked.Decrement(ref _pendingCount);
+                    try
                     {
-                        try
+                        await PublishAsync(msg.topic, msg.payload, cancellationToken).ConfigureAwait(false);
+                        _logger?.LogDebug("Pending message sent TOPIC=\"{topic}\"", msg.topic);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "Error publishing pending message TOPIC=\"{topic}\"", msg.topic);
+
+                        if (!cancellationToken.IsCancellationRequested)
                         {
-                            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
-                            await EnqueueMessageAsync(msg.topic, msg.payload, cancellationToken).ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            break;
+                            try
+                            {
+                                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                                await EnqueueMessageAsync(msg.topic, msg.payload, cancellationToken).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                break;
+                            }
                         }
                     }
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal shutdown
         }
 
         _logger?.LogInformation("Pending message processor stopped");
