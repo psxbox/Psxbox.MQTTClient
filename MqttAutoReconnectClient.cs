@@ -20,6 +20,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
     private Task? _reconnectTask;
     private Task? _pendingMessageProcessorTask;
     private volatile bool _disposed;
+    private long _pendingCount;
     private readonly Channel<(string topic, byte[] payload)> _pendingMessages =
         Channel.CreateBounded<(string topic, byte[] payload)>(10_000);
 
@@ -29,6 +30,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
     public event Func<Task>? OnDisconnected;
 
     public bool IsConnected => _client.IsConnected;
+    public int PendingCount => (int)Math.Min(int.MaxValue, Interlocked.Read(ref _pendingCount));
 
     public MqttAutoReconnectClient(MqttClientInfo info, ILogger? logger = null)
     {
@@ -162,6 +164,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
             // Xabarni o'qish va yuborish
             if (_pendingMessages.Reader.TryRead(out var msg))
             {
+                Interlocked.Decrement(ref _pendingCount);
                 try
                 {
                     await PublishAsync(msg.topic, msg.payload, cancellationToken).ConfigureAwait(false);
@@ -170,6 +173,19 @@ public sealed class MqttAutoReconnectClient : IDisposable
                 catch (Exception ex)
                 {
                     _logger?.LogError(ex, "Error publishing pending message TOPIC=\"{topic}\"", msg.topic);
+
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                            await EnqueueMessageAsync(msg.topic, msg.payload, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -236,7 +252,16 @@ public sealed class MqttAutoReconnectClient : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(topic);
         ArgumentNullException.ThrowIfNull(payload);
-        await _pendingMessages.Writer.WriteAsync((topic, payload), cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _pendingCount);
+        try
+        {
+            await _pendingMessages.Writer.WriteAsync((topic, payload), cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            Interlocked.Decrement(ref _pendingCount);
+            throw;
+        }
     }
 
     public async Task EnqueueMessageAsync(string topic, string payload, CancellationToken cancellationToken = default)
@@ -244,7 +269,7 @@ public sealed class MqttAutoReconnectClient : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(topic);
         ArgumentNullException.ThrowIfNull(payload);
         var bytes = System.Text.Encoding.UTF8.GetBytes(payload);
-        await _pendingMessages.Writer.WriteAsync((topic, bytes), cancellationToken).ConfigureAwait(false);
+        await EnqueueMessageAsync(topic, bytes, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task UpdateOptionsAsync(MqttClientInfo info, CancellationToken cancellationToken = default)
