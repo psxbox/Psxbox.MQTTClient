@@ -8,7 +8,7 @@ namespace Psxbox.MQTTClient;
 /// Lightweight managed MQTT client for MQTTnet 5.x (ManagedClient removed in v5).
 /// Provides auto-reconnect with backoff, race-condition-safe connect, and simple API.
 /// </summary>
-public sealed class MqttAutoReconnectClient : IDisposable
+public sealed class MqttAutoReconnectClient : IMqttReconnectClient
 {
     private readonly ILogger? _logger;
     private readonly IMqttClient _client = new MqttClientFactory().CreateMqttClient();
