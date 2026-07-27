@@ -1,5 +1,18 @@
 # O'zgarishlar Tarixi
 
+## [3.1.0] - 2026-07-27
+
+### ✨ Qo'shildi
+
+- `IMqttReconnectClient` interfeysi ajratib olindi — testability uchun
+
+### 🔄 O'zgartirildi
+
+- `Microsoft.Extensions.Configuration.Abstractions` va `Microsoft.Extensions.Logging.Abstractions` paketlari `10.0.9` versiyasiga yangilandi
+- `MQTTnet` paketi `5.2.0.1603` versiyasiga yangilandi
+
+---
+
 ## [3.0.0] - 2026-04-22
 
 ### 🗑️ O'chirildi
