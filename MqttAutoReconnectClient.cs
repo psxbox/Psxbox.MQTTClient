@@ -147,16 +147,24 @@ public sealed class MqttAutoReconnectClient : IMqttReconnectClient
         }
     }
 
+    /// <summary>Ulangan holatda bitta xabarni necha marta urinib, keyin tashlab yuborish.</summary>
+    internal const int MaxPublishAttemptsPerMessage = 5;
+
     private async Task ProcessPendingMessagesAsync(CancellationToken cancellationToken)
     {
         _logger?.LogInformation("Pending message processor started");
+
+        // Yuborilmagan xabar navbat oxiriga qaytarilmaydi (tartib buzilardi, navbat to'la bo'lsa
+        // yagona o'quvchi o'z navbatiga yozishda abadiy kutib qolardi) — shu yerda saqlanib, birinchi bo'lib qayta yuboriladi.
+        (string topic, byte[] payload)? retry = null;
+        var attempts = 0;
 
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 // WaitToReadAsync — xabar kelguncha CPU band qilmaydi
-                if (!await _pendingMessages.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                if (retry is null && !await _pendingMessages.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
                     break;
 
                 // Connected bo'lguncha kutish (50ms interval)
@@ -165,31 +173,53 @@ public sealed class MqttAutoReconnectClient : IMqttReconnectClient
                     await Task.Delay(50, cancellationToken).ConfigureAwait(false);
                 }
 
-                // Channeldagi barcha xabarlarni ketma-ket yuborish (batch drain)
-                while (_pendingMessages.Reader.TryRead(out var msg))
+                // Avval qayta urinilayotgan xabar, keyin channeldagilar ketma-ket (batch drain)
+                while (true)
                 {
-                    Interlocked.Decrement(ref _pendingCount);
+                    (string topic, byte[] payload) msg;
+                    if (retry is { } pending)
+                    {
+                        msg = pending;
+                    }
+                    else if (_pendingMessages.Reader.TryRead(out var next))
+                    {
+                        Interlocked.Decrement(ref _pendingCount);
+                        msg = next;
+                        attempts = 0;
+                    }
+                    else
+                    {
+                        break;
+                    }
+
                     try
                     {
                         await PublishAsync(msg.topic, msg.payload, cancellationToken).ConfigureAwait(false);
+                        retry = null;
                         _logger?.LogDebug("Pending message sent TOPIC=\"{topic}\"", msg.topic);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
                     }
                     catch (Exception ex)
                     {
-                        _logger?.LogError(ex, "Error publishing pending message TOPIC=\"{topic}\"", msg.topic);
+                        // Uzilish paytidagi xato urinish hisoblanmaydi — ulanish tiklangach qayta yuboriladi
+                        if (_client.IsConnected)
+                            attempts++;
 
-                        if (!cancellationToken.IsCancellationRequested)
+                        if (attempts >= MaxPublishAttemptsPerMessage)
                         {
-                            try
-                            {
-                                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
-                                await EnqueueMessageAsync(msg.topic, msg.payload, cancellationToken).ConfigureAwait(false);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                break;
-                            }
+                            _logger?.LogError(ex, "Pending message dropped after {attempts} attempts TOPIC=\"{topic}\"",
+                                attempts, msg.topic);
+                            retry = null;
+                            continue;
                         }
+
+                        _logger?.LogWarning(ex, "Error publishing pending message TOPIC=\"{topic}\", will retry", msg.topic);
+                        retry = msg;
+                        await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                        break; // ulanishni qayta tekshirish
                     }
                 }
             }
