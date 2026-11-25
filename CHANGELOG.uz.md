@@ -1,5 +1,18 @@
 # O'zgarishlar Tarixi
 
+## [3.2.0] - 2026-11-24
+
+### ✨ Qo'shildi
+
+- `MqttClientInfo.PersistentSession` va `SessionExpirySeconds` — persistent session (CleanStart=false) bilan ulanish; broker uzilish paytidagi QoS 1+ xabarlarni saqlaydi
+- `SubscribeAsync(topic, qos, ...)` — QoS bilan obuna bo'lish (interfeysda default implementatsiya bilan)
+
+### 🔧 O'zgardi
+
+- `MqttClientInfo.IsEqual` endi `PersistentSession` va `SessionExpirySeconds` ni ham solishtiradi
+
+---
+
 ## [3.1.0] - 2026-07-27
 
 ### ✨ Qo'shildi

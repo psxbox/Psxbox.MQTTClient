@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using MQTTnet;
+using MQTTnet.Protocol;
 using System.Threading.Channels;
 
 namespace Psxbox.MQTTClient;
@@ -251,12 +252,15 @@ public sealed class MqttAutoReconnectClient : IMqttReconnectClient
         return _client.IsConnected;
     }
 
-    public async Task SubscribeAsync(string topic, CancellationToken cancellationToken = default)
+    public Task SubscribeAsync(string topic, CancellationToken cancellationToken = default)
+        => SubscribeAsync(topic, MqttQualityOfServiceLevel.AtMostOnce, cancellationToken);
+
+    public async Task SubscribeAsync(string topic, MqttQualityOfServiceLevel qos, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(topic);
         await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
-        await _client.SubscribeAsync(topic, cancellationToken: cancellationToken).ConfigureAwait(false);
-        _logger?.LogDebug("Subscribed: {topic}", topic);
+        await _client.SubscribeAsync(topic, qos, cancellationToken).ConfigureAwait(false);
+        _logger?.LogDebug("Subscribed: {topic} (QoS {qos})", topic, (int)qos);
     }
 
     public async Task UnsubscribeAsync(string topic, CancellationToken cancellationToken = default)
@@ -336,7 +340,9 @@ public sealed class MqttAutoReconnectClient : IMqttReconnectClient
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
                 .WithProtocolVersion(MQTTnet.Formatter.MqttProtocolVersion.V500)
                 .WithCredentials(_info.UserName, _info.Password)
-                .WithCleanStart(true)
+                // Persistent session: broker ulanish uzilgan paytdagi QoS 1+ xabarlarni saqlab turadi
+                .WithCleanStart(!_info.PersistentSession)
+                .WithSessionExpiryInterval(_info.PersistentSession ? _info.SessionExpirySeconds : 0)
                 .WithTimeout(TimeSpan.FromSeconds(10))
                 .Build();
 
